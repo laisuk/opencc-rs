@@ -46,7 +46,7 @@ pub struct Opencc {
 impl Opencc {
     // #[allow(unused_variables)]
     pub fn new() -> Self {
-        let lib = unsafe { Library::new("lib/opencc.dll") }.expect("Failed to load DLL");
+        let lib = unsafe { Library::new("lib/opencc") }.expect("Failed to load DLL");
         unsafe {
             let opencc_open: Symbol<OpenccOpenFunc> =
                 lib.get(b"opencc_open").expect("Failed to load opencc_open");
