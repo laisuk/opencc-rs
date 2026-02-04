@@ -1,7 +1,5 @@
-extern crate libloading;
-
+use std::borrow::Cow;
 use lazy_static::lazy_static;
-use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 
@@ -165,7 +163,7 @@ impl Opencc {
 
     pub fn convert_with_punctuation(&self, input: &str, config: &str) -> String {
         let converted_str = self.convert_by(input, config);
-        Self::convert_punctuation(&converted_str, config)
+        Self::convert_punctuation_cow(&converted_str, config).into_owned()
     }
 
     pub fn zho_check(&self, input: &str) -> i8 {
@@ -189,38 +187,113 @@ impl Opencc {
         code
     }
 
+    //     fn convert_punctuation(sv: &str, config: &str) -> String {
+    //         let mut s2t_punctuation_chars: HashMap<&str, &str> = HashMap::new();
+    //         s2t_punctuation_chars.insert("“", "「");
+    //         s2t_punctuation_chars.insert("”", "」");
+    //         s2t_punctuation_chars.insert("‘", "『");
+    //         s2t_punctuation_chars.insert("’", "』");
+    //
+    //         let output_text;
+    //
+    //         if config.starts_with('s') || !config.contains('s') {
+    //             let s2t_pattern = s2t_punctuation_chars.keys().cloned().collect::<String>();
+    //             let s2t_regex = Regex::new(&format!("[{}]", s2t_pattern)).unwrap();
+    //             output_text = s2t_regex
+    //                 .replace_all(sv, |caps: &regex::Captures| {
+    //                     s2t_punctuation_chars[caps.get(0).unwrap().as_str()]
+    //                 })
+    //                 .into_owned();
+    //         } else {
+    //             let mut t2s_punctuation_chars: HashMap<&str, &str> = HashMap::new();
+    //             for (key, value) in s2t_punctuation_chars.iter() {
+    //                 t2s_punctuation_chars.insert(value, key);
+    //             }
+    //             let t2s_pattern = t2s_punctuation_chars.keys().cloned().collect::<String>();
+    //             let t2s_regex = Regex::new(&format!("[{}]", t2s_pattern)).unwrap();
+    //             output_text = t2s_regex
+    //                 .replace_all(sv, |caps: &regex::Captures| {
+    //                     t2s_punctuation_chars[caps.get(0).unwrap().as_str()]
+    //                 })
+    //                 .into_owned();
+    //         }
+    //         output_text
+    //     }
+    #[inline]
+    #[allow(dead_code)]
     fn convert_punctuation(sv: &str, config: &str) -> String {
-        let mut s2t_punctuation_chars: HashMap<&str, &str> = HashMap::new();
-        s2t_punctuation_chars.insert("“", "「");
-        s2t_punctuation_chars.insert("”", "」");
-        s2t_punctuation_chars.insert("‘", "『");
-        s2t_punctuation_chars.insert("’", "』");
+        // Your old rule:
+        // - if config starts with 's' OR config doesn't contain 's' -> do S2T punct
+        // - else -> do T2S punct
+        let s2t = config.starts_with('s') || !config.contains('s');
 
-        let output_text;
-
-        if config.starts_with('s') || !config.contains('s') {
-            let s2t_pattern = s2t_punctuation_chars.keys().cloned().collect::<String>();
-            let s2t_regex = Regex::new(&format!("[{}]", s2t_pattern)).unwrap();
-            output_text = s2t_regex
-                .replace_all(sv, |caps: &regex::Captures| {
-                    s2t_punctuation_chars[caps.get(0).unwrap().as_str()]
-                })
-                .into_owned();
-        } else {
-            let mut t2s_punctuation_chars: HashMap<&str, &str> = HashMap::new();
-            for (key, value) in s2t_punctuation_chars.iter() {
-                t2s_punctuation_chars.insert(value, key);
+        // Fast path: if no target chars exist, return original.
+        // (Still returns String to match your signature.)
+        if s2t {
+            if !sv.contains('“') && !sv.contains('”') && !sv.contains('‘') && !sv.contains('’')
+            {
+                return sv.to_owned();
             }
-            let t2s_pattern = t2s_punctuation_chars.keys().cloned().collect::<String>();
-            let t2s_regex = Regex::new(&format!("[{}]", t2s_pattern)).unwrap();
-            output_text = t2s_regex
-                .replace_all(sv, |caps: &regex::Captures| {
-                    t2s_punctuation_chars[caps.get(0).unwrap().as_str()]
-                })
-                .into_owned();
+        } else {
+            if !sv.contains('「') && !sv.contains('」') && !sv.contains('『') && !sv.contains('』')
+            {
+                return sv.to_owned();
+            }
         }
-        output_text
+
+        let mut out = String::with_capacity(sv.len());
+        if s2t {
+            for ch in sv.chars() {
+                match ch {
+                    '“' => out.push('「'),
+                    '”' => out.push('」'),
+                    '‘' => out.push('『'),
+                    '’' => out.push('』'),
+                    _ => out.push(ch),
+                }
+            }
+        } else {
+            for ch in sv.chars() {
+                match ch {
+                    '「' => out.push('“'),
+                    '」' => out.push('”'),
+                    '『' => out.push('‘'),
+                    '』' => out.push('’'),
+                    _ => out.push(ch),
+                }
+            }
+        }
+
+        out
     }
+
+    #[inline]
+    fn convert_punctuation_cow<'a>(sv: &'a str, config: &str) -> Cow<'a, str> {
+        let s2t = config.starts_with('s') || !config.contains('s');
+
+        let needs = if s2t {
+            sv.contains('“') || sv.contains('”') || sv.contains('‘') || sv.contains('’')
+        } else {
+            sv.contains('「') || sv.contains('」') || sv.contains('『') || sv.contains('』')
+        };
+
+        if !needs {
+            return Cow::Borrowed(sv);
+        }
+
+        let mut out = String::with_capacity(sv.len());
+        if s2t {
+            for ch in sv.chars() {
+                out.push(match ch { '“' => '「', '”' => '」', '‘' => '『', '’' => '』', _ => ch });
+            }
+        } else {
+            for ch in sv.chars() {
+                out.push(match ch { '「' => '“', '」' => '”', '『' => '‘', '』' => '’', _ => ch });
+            }
+        }
+        Cow::Owned(out)
+    }
+
 }
 
 pub fn find_max_utf8_length(sv: &str, max_byte_count: usize) -> usize {
